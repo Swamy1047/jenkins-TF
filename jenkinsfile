@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+    tools{
+        jdk 'jdk17'
+        nodejs 'node16'
+    }
+    environment{
+        SCANNER_HOME=tool 'sonar-scanner'
+    }
+
+    stages {
+        stage('clean WS') {
+            steps {
+                cleanWs()
+            }
+        }
+        
+        stage('Git Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Swamy1047/Amazon-FE.git'
+            }
+        }
+        
+        stage('Trivy FS') {
+            steps {
+                sh "trivy fs . > trivyfs.txt"
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=amazon \
+                    -Dsonar.projectKey=amazon '''
+                }
+            }
+        }
+        
+        stage('QG') {
+            steps {
+                script{
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-cred'
+                }
+            }
+        }
+        
+        stage('NPM') {
+            steps {
+                sh "npm install"
+            }
+        }
+        
+        stage('OWASP FS SCAN') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DC'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        
+        stage('BI & PI') {
+            steps {
+                script{
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){
+                        sh '''
+                        docker build -t amazon .
+                        docker tag amazon swamy1047/amazon:latest
+                        docker push swamy1047/amazon:latest
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Trivy image Scan') {
+            steps {
+                sh "trivy image swamy1047/amazon:latest > trivyimage.txt"
+            }
+        }
+        
+        stage('Deploy Application') {
+            steps {
+                sh "docker run -d --name amzon -p 3000:3000 swamy1047/amazon:latest"
+            }
+        }
+    }
+}
